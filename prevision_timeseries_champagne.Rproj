@@ -1,0 +1,61 @@
+---
+  title: 
+  
+  author: 
+  - Clovis Deletre
+  - Charles Vitry
+date:
+  output:html_notebook :
+  theme: cerulean
+number_sections: no
+toc: yes
+toc_float: true
+editor_options:
+  markdown:
+  wrap: 72
+always_allow_html: true
+---
+  
+  ```{=html}
+<style type="text/css">
+  body{ /* Normal  */
+      font-size: 20px;
+  }
+td {  /* Table  */
+    font-size: 8px;
+}
+h1.title {
+  font-size: 55px;
+  color: DarkBlue;
+}
+h1 { /* Header 1 */
+    font-size: 38px;
+  color: DarkBlue;
+}
+h2 { /* Header 2 */
+    font-size: 28px;
+  color: DarkBlue;
+}
+h3 { /* Header 3 */
+    font-size: 35px;
+  font-family: "Times New Roman", Times, serif;
+  color: DarkBlue;
+}
+code.r{ /* Code block */
+    font-size: 12px;
+}
+pre { /* Code block - determines code spacing between lines */
+    font-size: 14px;
+}
+</style>
+  ```
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+#install for export in pdf file
+#tinytex::install_tinytex()
+```
+
+<br> </br>
+  
+  
+  
