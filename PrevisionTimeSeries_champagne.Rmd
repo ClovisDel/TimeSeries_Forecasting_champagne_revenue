@@ -1,0 +1,387 @@
+---
+title: |
+  
+author: 
+- Clovis Deletre
+- Charles Vitry
+date:
+output:
+  rmarkdown::html_document:
+    theme: cerulean
+    number_sections: no
+    toc: yes
+    toc_depth: 5
+    toc_float: true
+---
+<style type="text/css">
+
+body{ /* Normal  */
+      font-size: 20px;
+  }
+td {  /* Table  */
+  font-size: 8px;
+}
+h1.title {
+  font-size: 55px;
+  color: DarkBlue;
+}
+h1 { /* Header 1 */
+  font-size: 38px;
+  color: DarkBlue;
+}
+h2 { /* Header 2 */
+    font-size: 28px;
+  color: DarkBlue;
+}
+h3 { /* Header 3 */
+  font-size: 35px;
+  font-family: "Times New Roman", Times, serif;
+  color: DarkBlue;
+}
+code.r{ /* Code block */
+    font-size: 12px;
+}
+pre { /* Code block - determines code spacing between lines */
+    font-size: 14px;
+}
+</style>
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+#install for export in pdf file
+#tinytex::install_tinytex()
+```
+<br> </br>
+
+```{r include=FALSE}
+if(!require(forecast)) install.packages("tm", repos = "http://cran.us.r-project.org")
+require(forecast)
+
+if(!require(fpp2)) install.packages("tm", repos = "http://cran.us.r-project.org")
+require(fpp2)
+
+if(!require(MLmetrics)) install.packages("tm", repos = "http://cran.us.r-project.org")
+require(MLmetrics)
+
+
+library(ggplot2)
+library(fpp2)
+library(MLmetrics)
+```
+
+
+
+Import de la base, on select que la colonne des valeurs
+```{r}
+data <- read.csv("Trafic-voyageurs.csv", sep=";")
+summary(data)
+data_value <- data[,2]
+```
+
+
+Création de la série chronologique : 
+```{r}
+data_ts <- ts(data_value, start=2011, frequency=12)
+
+#plot(data_ts)
+autoplot(data_ts) + ggtitle("Série chronologique Trafic voyageurs") +
+  ylab("Nbr voyageurs")
+```
+
+```{r}
+#revoir l affichage car ca prend pas en compte tt 2019
+data_ts_train <- window(data_ts, start = c(2011, 1), end = c(2018,12))
+data_ts_test <- window(data_ts, start= c(2019,1), end = c(2019,8))
+data_ts_train
+data_ts_test
+
+plot(data_ts, xlim=c(2011,2020))
+lines(data_ts_test, col=3)
+legend("topleft", lty = 1, col=c(1,3), legend=c("Série chronologique Train", "Série chronologique Test"))
+```
+-> strong trend
+-> patern qui se repete, saisonnalité ? 
+
+Analyse de la saisonnalité en superposant chaque année (par mois):
+
+-> en supprimant la tendance on voit bien la saisonnalité => saisonnalité régulière
+
+```{r}
+ggseasonplot(data_ts)
+data_ts_without_trend = diff(data_ts)
+ggseasonplot(data_ts_without_trend)
+```
+
+
+DECOMPOSITION : 
+additive / Multiplicative 
+Ts = Trend + Seasonal + Random /
+Ts = Trend * Seasonal * Random
+
+
+```{r}
+decomposed_data <- decompose(data_ts_train, type="additive")
+plot(decomposed_data$trend)
+plot(decomposed_data$seasonal)
+plot(decomposed_data$random)
+
+boxplot(data_ts ~ cycle(data_ts))
+```
+
+-> on distingue des saisonnalités => faire régression ca n'a pas de sens 
+                                  => modèle de Buys Ballot 
+
+-> bonne repartition du bruit
+-> quelques outliers
+
+```{r}
+checkresiduals(remainder(decomposed_data))
+```
+
+
+On a tendances + saisonnalité 
+
+
+#########################################################
+########################################################
+
+
+FORECAST : 
+
+
+```{r}
+
+
+
+```
+
+
+
+BUYS BALLOT : 
+
+https://mpra.ub.uni-muenchen.de/77718/1/MPRA_paper_77718.pdf page 175
+
+L’approche de BUYS-BALLOT consiste à introduire des variables indicatrices
+correspondant à chaque saison définit par le cycle d'observation. Pour les données
+trimestrielles, on intègre 4 variables indicatrices. Et pour les données mensuelles, on
+intègre 12 variables indicatrices.
+
+Le modèle doit alors être estimé (sans constante) avec ces variables indicatrices.
+
+```{r}
+
+
+
+
+```
+
+
+
+
+
+
+
+
+#############
+Basic Models 
+#############
+
+
+- meanf : Average Method : prend la valeur moyenne de toute les observations pour toutes les prédictions, 
+- naive : Naive Method : prend la dernière observation pour toutes les prédictions,
+- drift : Drift Method : prend la première et la dernière observations et trace une lignes entre les deux, on utilise la courbe pour les prédictions,
+- snaive : Seasonal Naive Forecast : Prend la dernière valeur de la saison précédente comme prédiction (ex : sept 2018 = sep 2019 + erreur)
+```{r}
+library(forecast)
+mean <- meanf(data_ts_train, h=8)
+naivem <- naive(data_ts_train, h=8)
+driftm <- rwf(data_ts_train, h=8, drif=T)
+snaivem <- snaive(data_ts_train, h=8)
+```
+
+```{r}
+plot(mean, plot.conf = F, main="")
+lines(naivem$mean, col=2, lty=1)
+lines(driftm$mean, col=5, lty=1)
+lines(snaivem$mean, col = 4, lty=1)
+legend("topleft", lty=1, col=c(1,2,3,4), legend=c("Mean Method", "Naive Method", "Drif Method", "Seasonal Naive"))
+
+
+#comparaison :
+plot(snaivem, plot.conf = F, main="")
+lines(data_ts_test, col = 6, lty=1, lwd=3)
+
+plot(driftm, plot.conf = F, main="")
+lines(data_ts_test, col = 6, lty=1, lwd=3)
+
+```
+
+
+On regarde :
+MAE : Mean Absolute Error : 
+RMSE : Root Mean Squarred Error :
+MASE : Mean Absolute Scaled Error :
+MAPE : Mean Absolute Percentage Error :
+
+
+res = pred - val
+MAE = sum(abs(res))/length(val)
+RSS = sum(res^2)
+MSE = RSS/length(val)
+RMSE = sqrt(MSE)
+    
+
+La plus populaire est la MAPE 
+
+MAPE(y_pred, y_true)
+
+MAPE = (1/n) * Σ(|actual – forecast| / |actual|) * 100
+"a MAPE value of 6% means that the average difference between the forecasted value and the actual value is 6%" 
+
+```{r}
+print(summary(mean))
+checkresiduals(mean)
+accuracy(mean, data_ts_test)
+
+```
+
+```{r}
+print(summary(naivem))
+checkresiduals(naivem)
+accuracy(naivem, data_ts_test)
+
+```
+
+```{r}
+print(summary(driftm))
+checkresiduals(driftm)
+accuracy(driftm, data_ts_test)
+
+```
+
+```{r}
+print(summary(snaivem))
+checkresiduals(snaivem)
+accuracy(snaivem, data_ts_test)
+
+```
+
+
+
+#############
+Simple exponential smoothing
+#############
+
+```{r}
+fcst_se <- ses(data_ts_train, h = 8)
+print(summary(fcst_se))
+checkresiduals(fcst_se)
+```
+
+```{r}
+plot(fcst_ets)
+lines(data_ts_test, col="red")
+
+
+df_fc = as.data.frame(fcst_ets)
+predict_value_se <- df_fc$`Point Forecast`
+MAPE(predict_value_se, data_ts_test)*100
+```
+
+```{r}
+
+
+```
+
+
+
+
+#############
+Fit Exponential Smoothing model -> trouve le meilleur lissage expo
+#############
+
+```{r}
+fit_ets <- ets(data_ts_train) 
+print(summary(fit_ets))
+checkresiduals(fit_ets)
+
+
+```
+
+```{r}
+fcst_ets <- forecast(fit_ets, h=8)
+plot(fcst_ets)
+lines(data_ts_test, col="red")
+
+
+df_ets = as.data.frame(fcst_ets)
+predict_value_ets = df_ets$`Point Forecast`
+MAPE(predict_value_ets, data_ts_test)*100
+
+```
+
+
+
+#############
+Fit an ARIMA model 
+#############
+
+```{r}
+# retourne les meilleurs paramètres 
+# d=1 enleve la tendance
+# D=1 enleve la saisonnalité 
+# => avoir des données stationnaires
+# trace : voir les résultats
+fit_arima <- auto.arima(data_ts_train, d=1, D=1, stepwise = FALSE, approximation = FALSE, trace=TRUE)
+print(summary(fit_arima))
+checkresiduals(fit_arima)
+```
+
+```{r}
+fcst_arima <- forecast(fit_arima, h=8)
+plot(fcst_arima)
+lines(data_ts_test, col='red')
+
+
+df_arima = as.data.frame(fcst_arima)
+predict_value_arima = df_arima$`Point Forecast`
+MAPE(predict_value_arima, data_ts_test)*100
+```
+
+```{r}
+
+```
+
+```{r}
+
+
+```
+
+```{r}
+
+
+```
+
+```{r}
+
+
+```
+
+```{r}
+
+
+```
+
+```{r}
+
+
+```
+
+```{r}
+
+
+```
+
+
+
