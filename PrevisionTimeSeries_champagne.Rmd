@@ -46,307 +46,134 @@ pre { /* Code block - determines code spacing between lines */
 }
 </style>
 
-```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
-
-#install for export in pdf file
-#tinytex::install_tinytex()
-```
-<br> </br>
 
 ```{r include=FALSE}
 if(!require(forecast)) install.packages("tm", repos = "http://cran.us.r-project.org")
 require(forecast)
 
-if(!require(fpp2)) install.packages("tm", repos = "http://cran.us.r-project.org")
-require(fpp2)
-
-if(!require(MLmetrics)) install.packages("tm", repos = "http://cran.us.r-project.org")
-require(MLmetrics)
+if(!require(Kendall)) install.packages(Kendall)
 
 
+
+library(forecast)
 library(ggplot2)
-library(fpp2)
-library(MLmetrics)
+
 ```
 
 
 
 Import de la base, on select que la colonne des valeurs
 ```{r}
-data <- read.csv("Trafic-voyageurs.csv", sep=";")
-summary(data)
+library(readr)
+data <- read_delim("data.csv", 
+    delim = ";", locale = locale(encoding = "ISO-8859-1"))
+data
+```
+
+
+```{r}
 data_value <- data[,2]
-```
-
-
-Création de la série chronologique : 
-```{r}
-data_ts <- ts(data_value, start=2011, frequency=12)
-
-#plot(data_ts)
-autoplot(data_ts) + ggtitle("Série chronologique Trafic voyageurs") +
-  ylab("Nbr voyageurs")
+summary(data)
 ```
 
 ```{r}
-#revoir l affichage car ca prend pas en compte tt 2019
-data_ts_train <- window(data_ts, start = c(2011, 1), end = c(2018,12))
-data_ts_test <- window(data_ts, start= c(2019,1), end = c(2019,8))
-data_ts_train
-data_ts_test
+library(TSstudio)
+data_ts <- ts(data_value, start = 1962, frequency = 12)
 
-plot(data_ts, xlim=c(2011,2020))
-lines(data_ts_test, col=3)
-legend("topleft", lty = 1, col=c(1,3), legend=c("Série chronologique Train", "Série chronologique Test"))
+plot(data_ts, main = "Série temporelle revenue champagne", xlab = "Année", ylab = "Valeur")
 ```
--> strong trend
--> patern qui se repete, saisonnalité ? 
 
-Analyse de la saisonnalité en superposant chaque année (par mois):
-
--> en supprimant la tendance on voit bien la saisonnalité => saisonnalité régulière
+On décomposé la série temporelle en tendance, saisonnalité et bruit
+> forte saisonnalité (ici annuelle) et tendance 
 
 ```{r}
-ggseasonplot(data_ts)
-data_ts_without_trend = diff(data_ts)
-ggseasonplot(data_ts_without_trend)
+decompose_ts <- decompose(data_ts)
+plot(decompose_ts)
 ```
 
-
-DECOMPOSITION : 
-additive / Multiplicative 
-Ts = Trend + Seasonal + Random /
-Ts = Trend * Seasonal * Random
-
+> on differencie une première fois en saisonnalité donc par (I-B^12)
 
 ```{r}
-decomposed_data <- decompose(data_ts_train, type="additive")
-plot(decomposed_data$trend)
-plot(decomposed_data$seasonal)
-plot(decomposed_data$random)
-
-boxplot(data_ts ~ cycle(data_ts))
+data_diff12 <- diff(data_ts, 12)
+data_diff12
+plot(data_diff12, main = "Série temporelle revenue champagne (I-B^12)", xlab = "Année", ylab = "Valeur")
 ```
 
--> on distingue des saisonnalités => faire régression ca n'a pas de sens 
-                                  => modèle de Buys Ballot 
 
--> bonne repartition du bruit
--> quelques outliers
+> on décompose la série temporelle différenciée en saisonnalité, on remarque encore une tendance
 
 ```{r}
-checkresiduals(remainder(decomposed_data))
+decompose_diff12 <- decompose(data_diff12)
+plot(decompose_diff12)
 ```
 
+> test de tendance : Mann-Kendall Test  : https://www.statology.org/mann-kendall-trend-test-r/
+(H0) : There is no trend 
+(H1) : There is a trend
+  
+```{r}
+library(Kendall)
 
-On a tendances + saisonnalité 
+MannKendall(data_diff12)
+```
+pvalue = 0.056778 > 0.05 donc on ne rejette pas l hypothèse (H0) donc pas de tendance
+
+> pas besoin de différencier en tendance, on estime que (I-B^12) est suffisant et comprend la différentiation en tendance
 
 
-#########################################################
-########################################################
+Maintenant qu on a notre paramètre d et D on cherche les autres paramètres : p et q (P et Q pour la saisonnalité)
 
 
-FORECAST : 
+Pour trouver la valeur du paramètre q on regarde l ACF, pour trouver à "quel niveau" on doit mettre en place un moyenne mobile.
+```{r}
+acf(data_diff12, lag.max = 24, main = "ACF revenue champagne", ci.type = "ma")
+```
 
+D après le corrélograme de (I-B^12)Xt on peut déduire :
+> La série est stationnaire
+> La série présente des valeurs fortes en ^p(1) et ^p(12), donc probablement introduire un MA
+> Dans les premiers niveaux on remarque une valeur en forte en q=1,
+On garde un MA(1) pour le moment.
+
+
+Pour trouver la valeur du paramètre p on regarde l PACF :  
+```{r}
+pacf(data_diff12, main = "PACF revenue champagne")
+```
+
+Ce qu on peut remarquer, c est qu il faut attendre le lag = 12 pour avoir une valeur significative, donc on garde un AR(0) pour le moment.
+
+
+Test du modèle retenue :
+On obitent donc un SARIMA12 (0,0,1)(0,1,1)
+
+De la forme : (I-B^12)Xt = (1 - θ1)(1 - θ12)εt
 
 ```{r}
-
-
-
+model1 <- arima(data_ts, order = c(0,0,1), seasonal = list(order = c(0,1,1), period = 12))
+model1
 ```
+> on obtient les valeurs de nos deux coefs : θ1 = 0.3495 et θ12 = -0.2788
+> on obtient également les valeurs de leurs écarts-type : σθ1 = 0.1070 et σθ12 = 0.0946
+> AIC à 1531.58, il est utile pour la comparaison de modèles, plus il est petit plus le modèle est bon
 
-
-
-BUYS BALLOT : 
-
-https://mpra.ub.uni-muenchen.de/77718/1/MPRA_paper_77718.pdf page 175
-
-L’approche de BUYS-BALLOT consiste à introduire des variables indicatrices
-correspondant à chaque saison définit par le cycle d'observation. Pour les données
-trimestrielles, on intègre 4 variables indicatrices. Et pour les données mensuelles, on
-intègre 12 variables indicatrices.
-
-Le modèle doit alors être estimé (sans constante) avec ces variables indicatrices.
-
-```{r}
-
-
-
-
-```
-
-
-
-
-
-
-
-
-#############
-Basic Models 
-#############
-
-
-- meanf : Average Method : prend la valeur moyenne de toute les observations pour toutes les prédictions, 
-- naive : Naive Method : prend la dernière observation pour toutes les prédictions,
-- drift : Drift Method : prend la première et la dernière observations et trace une lignes entre les deux, on utilise la courbe pour les prédictions,
-- snaive : Seasonal Naive Forecast : Prend la dernière valeur de la saison précédente comme prédiction (ex : sept 2018 = sep 2019 + erreur)
+On test la significativité de nos coefs :
 ```{r}
 library(forecast)
-mean <- meanf(data_ts_train, h=8)
-naivem <- naive(data_ts_train, h=8)
-driftm <- rwf(data_ts_train, h=8, drif=T)
-snaivem <- snaive(data_ts_train, h=8)
-```
-
-```{r}
-plot(mean, plot.conf = F, main="")
-lines(naivem$mean, col=2, lty=1)
-lines(driftm$mean, col=5, lty=1)
-lines(snaivem$mean, col = 4, lty=1)
-legend("topleft", lty=1, col=c(1,2,3,4), legend=c("Mean Method", "Naive Method", "Drif Method", "Seasonal Naive"))
-
-
-#comparaison :
-plot(snaivem, plot.conf = F, main="")
-lines(data_ts_test, col = 6, lty=1, lwd=3)
-
-plot(driftm, plot.conf = F, main="")
-lines(data_ts_test, col = 6, lty=1, lwd=3)
-
-```
-
-
-On regarde :
-MAE : Mean Absolute Error : 
-RMSE : Root Mean Squarred Error :
-MASE : Mean Absolute Scaled Error :
-MAPE : Mean Absolute Percentage Error :
-
-
-res = pred - val
-MAE = sum(abs(res))/length(val)
-RSS = sum(res^2)
-MSE = RSS/length(val)
-RMSE = sqrt(MSE)
-    
-
-La plus populaire est la MAPE 
-
-MAPE(y_pred, y_true)
-
-MAPE = (1/n) * Σ(|actual – forecast| / |actual|) * 100
-"a MAPE value of 6% means that the average difference between the forecasted value and the actual value is 6%" 
-
-```{r}
-print(summary(mean))
-checkresiduals(mean)
-accuracy(mean, data_ts_test)
-
-```
-
-```{r}
-print(summary(naivem))
-checkresiduals(naivem)
-accuracy(naivem, data_ts_test)
-
-```
-
-```{r}
-print(summary(driftm))
-checkresiduals(driftm)
-accuracy(driftm, data_ts_test)
-
-```
-
-```{r}
-print(summary(snaivem))
-checkresiduals(snaivem)
-accuracy(snaivem, data_ts_test)
-
-```
-
-
-
-#############
-Simple exponential smoothing
-#############
-
-```{r}
-fcst_se <- ses(data_ts_train, h = 8)
-print(summary(fcst_se))
-checkresiduals(fcst_se)
-```
-
-```{r}
-plot(fcst_ets)
-lines(data_ts_test, col="red")
-
-
-df_fc = as.data.frame(fcst_ets)
-predict_value_se <- df_fc$`Point Forecast`
-MAPE(predict_value_se, data_ts_test)*100
-```
-
-```{r}
-
-
+t_stat(model1)
 ```
 
 
 
 
-#############
-Fit Exponential Smoothing model -> trouve le meilleur lissage expo
-#############
+```{r}
+
+
 
 ```{r}
-fit_ets <- ets(data_ts_train) 
-print(summary(fit_ets))
-checkresiduals(fit_ets)
-
-
-```
 
 ```{r}
-fcst_ets <- forecast(fit_ets, h=8)
-plot(fcst_ets)
-lines(data_ts_test, col="red")
 
-
-df_ets = as.data.frame(fcst_ets)
-predict_value_ets = df_ets$`Point Forecast`
-MAPE(predict_value_ets, data_ts_test)*100
-
-```
-
-
-
-#############
-Fit an ARIMA model 
-#############
-
-```{r}
-# retourne les meilleurs paramètres 
-# d=1 enleve la tendance
-# D=1 enleve la saisonnalité 
-# => avoir des données stationnaires
-# trace : voir les résultats
-fit_arima <- auto.arima(data_ts_train, d=1, D=1, stepwise = FALSE, approximation = FALSE, trace=TRUE)
-print(summary(fit_arima))
-checkresiduals(fit_arima)
-```
-
-```{r}
-fcst_arima <- forecast(fit_arima, h=8)
-plot(fcst_arima)
-lines(data_ts_test, col='red')
-
-
-df_arima = as.data.frame(fcst_arima)
-predict_value_arima = df_arima$`Point Forecast`
-MAPE(predict_value_arima, data_ts_test)*100
 ```
 
 ```{r}
@@ -370,17 +197,9 @@ MAPE(predict_value_arima, data_ts_test)*100
 
 ```{r}
 
-
-```
-
-```{r}
-
-
-```
-
-```{r}
-
-
+library(forecast)
+fit <- auto.arima(data_ts, seasonal = TRUE, stepwise = FALSE, approximation = FALSE)  
+fit
 ```
 
 
