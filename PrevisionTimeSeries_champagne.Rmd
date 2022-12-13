@@ -256,6 +256,10 @@ MSE
 RMSE
 
 ```
-
+```{r}
+library(forecast)
+fit <- auto.arima(data_ts_train, seasonal = TRUE, stepwise = FALSE, approximation = FALSE)  
+fit
+```
 
 CONCLURE 
