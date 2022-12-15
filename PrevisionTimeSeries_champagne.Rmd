@@ -48,16 +48,10 @@ pre { /* Code block - determines code spacing between lines */
 
 
 ```{r include=FALSE}
-if(!require(forecast)) install.packages("tm", repos = "http://cran.us.r-project.org")
-require(forecast)
-
-install.packages("Metrics")            
-if(!require(Kendall)) install.packages(Kendall)
-
 library("Metrics")
 library(forecast)
 library(ggplot2)
-
+library(dplyr)
 ```
 
 # Introduction
@@ -87,15 +81,20 @@ On transforme la base en série temporelle avec la fonction ts() de R.
 
 On précise la fréquence de la série (ici mensuelle) et la date de début de la série.
 
-On divise la série en deux parties : une partie d'apprentissage et une partie de test.
+On divise la série en deux parties : une partie d'apprentissage et une partie de test à partir des 12 dernières observations
 ```{r}
-library(TSstudio)
 data_ts <- ts(data_value, start = 1962, frequency = 12)
 
 data_ts_train <- window(data_ts, start = c(1962, 1), end = c(1969, 9))
 data_ts_test <- window(data_ts, start = c(1969, 10), end = c(1970, 9))
+```
 
-plot(data_ts, main = "Série temporelle revenue champagne", xlab = "Année", ylab = "Valeur")
+```{r}
+data_ts
+```
+
+```{r}
+autoplot(data_ts , main = "Série temporelle revenue champagne" , xlab = "Année", ylab = "Valeur")
 ```
 
 
@@ -106,29 +105,33 @@ plot(data_ts, main = "Série temporelle revenue champagne", xlab = "Année", yla
 Pour déterminer notre modèle, il faut commencer par avoir une idée série stationnaire.
 
 Pour se faire on décompose la série temporelle en tendance, saisonnalité et bruit
+
 > on remarque rapidement forte saisonnalité (ici annuelle) et une tendance 
 
 ```{r}
-decompose_ts <- decompose(data_ts_train)
-plot(decompose_ts)
+decompose(data_ts_train) %>% 
+  autoplot()
 ```
 
 Pour commencer on differencie une première fois en saisonnalité donc en application le facteur (I-B^12)
 
 ```{r}
 data_diff12 <- diff(data_ts_train, 12)
-data_diff12
-plot(data_diff12, main = "Série temporelle revenue champagne (I-B^12)", xlab = "Année", ylab = "Valeur")
+
+autoplot(data_diff12, main = "Série temporelle revenue champagne (I-B^12)", xlab = "Année", ylab = "Valeur")
 ```
+
+
 
 On décompose la série temporelle différenciée pour l'analyser.
 
-```{r}
+```{r fig.keep='last'}
 decompose_diff12 <- decompose(data_diff12)
-plot(decompose_diff12)
+autoplot(decompose_diff12 , main = "Décomposition additive de la série temporelle revenue champagne (I-B^12)")
 ```
 
-A l'oeuil nu on remarque que la série temporelle n'a plus de tendance, mais on vérifie par le test de Mann-Kendall. 
+
+A l'oeil nu on remarque que la série temporelle n'a plus de tendance, mais on vérifie par le test de Mann-Kendall. 
 
 > test de tendance : Mann-Kendall Test  : https://www.statology.org/mann-kendall-trend-test-r/
 (H0) : There is no trend 
@@ -150,8 +153,9 @@ Maintenant qu on a notre paramètre d et D on cherche les autres paramètres : p
 
 
 Pour trouver la valeur du paramètre q on regarde l ACF, pour trouver à "quel niveau" on doit mettre en place un moyenne mobile.
-```{r}
-acf(data_diff12, lag.max = 24, main = "ACF revenue champagne", ci.type = "ma")
+```{r fig.keep='last'}
+acf(data_diff12, lag.max = 24, main = "ACF revenue champagne", ci.type = "ma") %>% 
+  autoplot()
 ```
 
 D'après le corrélograme de (I-B^12)Xt on peut déduire :
@@ -162,8 +166,9 @@ On garde un MA(1) pour le moment.
 
 
 Pour trouver la valeur du paramètre p on regarde la PACF :  
-```{r}
-pacf(data_diff12, main = "PACF revenue champagne")
+```{r fig.keep='last'}
+pacf(data_diff12, main = "PACF revenue champagne") %>% 
+  autoplot()
 ```
 
 Ce qu on peut remarquer, c'est qu'il faut attendre le lag = 12 pour avoir une valeur significative, donc on garde un AR(0) pour le moment.
@@ -213,14 +218,16 @@ On peut conclure que les résidus εt sont non corrélés.
 
 On vérifie visuellement nos résultats : 
 ```{r}
-plot(model1$residuals, main = "Résidus du modèle SARIMA12 (0,0,1)(0,1,1)", xlab = "Année", ylab = "Valeur")
+autoplot(model1$residuals, main = "Résidus du modèle SARIMA12 (0,0,1)(0,1,1)", xlab = "Année", ylab = "Valeur")
 ```
-```{r}
-acf(model1$residuals, lag.max = 24, main = "ACF des résidus du modèle SARIMA12 (0,0,1)(0,1,1)", ci.type = "ma")
+```{r fig.keep='last'}
+acf(model1$residuals, lag.max = 24, main = "ACF des résidus du modèle SARIMA12 (0,0,1)(0,1,1)", ci.type = "ma") %>% 
+  autoplot()
 ```
-> on a un pic significatif ce qui est normal pour l'acf des résidus.
-```{r}
-pacf(model1$residuals, main = "PACF des résidus du modèle SARIMA12 (0,0,1)(0,1,1)")
+ on a un pic significatif ce qui est normal pour l'acf des résidus.
+```{r fig.keep='last'}
+pacf(model1$residuals, main = "PACF des résidus du modèle SARIMA12 (0,0,1)(0,1,1)") %>% 
+  autoplot()
 ```
 
 
@@ -230,12 +237,24 @@ De ce fait on peut conclure que le modèle SARIMA12 (0,0,1)(0,1,1) est bon pour 
 ## Prédiction sur la série temporelle de test
 
 ```{r}
-# predict
-pred <- forecast(model1, 12)
-pred
-plot(pred)
-lines(data_ts_test, col='red')
+
 ```
+
+```{r}
+pred = predict(model1, 12)
+```
+
+```{r}
+#y = data.frame(data_ts, c(data_ts_train, predict(model1, 12)))
+```
+
+```{r}
+forecast(model1, h=12, xreg=fourierf(data_ts,2,0)) %>% 
+  autoplot()
+
+```
+
+
 
 On vérifie nos résultats aves les mesures suivantes : 
 
@@ -245,10 +264,10 @@ On vérifie nos résultats aves les mesures suivantes :
 > RMSE : Root Mean Squared Error
 
 ```{r}
-MAPE <- mape(data_ts_test, pred$mean)
-MAE <- mae(data_ts_test, pred$mean)
-MSE <- mse(data_ts_test, pred$mean)
-RMSE <- rmse(data_ts_test, pred$mean)
+MAPE <- mape(data_ts_test, pred$pred)
+MAE <- mae(data_ts_test, pred$pred)
+MSE <- mse(data_ts_test, pred$pred)
+RMSE <- rmse(data_ts_test, pred$pred)
 
 MAPE
 MAE
