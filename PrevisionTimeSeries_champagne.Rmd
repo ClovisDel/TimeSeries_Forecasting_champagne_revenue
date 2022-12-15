@@ -1,5 +1,5 @@
 ---
-title: |
+title: Projet prévision sur série chronologique par modèle SARIMA
   
 author: 
 - Clovis Deletre
@@ -48,94 +48,99 @@ pre { /* Code block - determines code spacing between lines */
 }
 </style>
 ```
-
 ```{r include=FALSE}
-library("Metrics")
-library(forecast)
-library(ggplot2)
-library(dplyr)
+# Librairies
+library(readr) # Lecture du document
+library("Metrics") # performance modèle
+library(forecast) # time series
+library(ggplot2) # affichage
+library(dplyr) # pipe
+library(Kendall) # test de tendance
+library(dygraphs) ; library(xts) # affichage prévision intéractif
+theme_set(theme_bw())
 ```
 
 # Introduction
 
-Dans le cadre de ce projet, nous souhaitons modéliser par un processus ARIMA une série temporelle données et réaliser des prévisions dessus.
+Dans le cadre de ce projet, nous souhaitons **modéliser par un processus** une série temporelle de données.
 
-Ici, la série concerne les ventes de champagne de janvier 1962 à septembre 1970.
+Ici, la série concerne les ventes de champagne de janvier 1962 à septembre 1970, avec une observation par mois.
 
-L'ambition est de pouvoir effectuer des prévision pour l'année suivante.
+L'ambition est de pouvoir effectuer une **prévision** sur les 12 dernières observations grâce à une modélisation sur le reste des données.
 
-## Importation des données et transformation en série temporelle
+## Importation des données
 
-Dans un premier temps on import de la base, on ne selectionne que la colonne des valeurs.
+On importe les données, puis on en affiche un résumé.
 
 ```{r}
-library(readr)
 data <- read_delim("data.csv", delim = ";", col_types = cols(date = col_date(format = "%d/%m/%Y")), 
     trim_ws = TRUE)
-data
-```
-
-```{r}
-data_value <- data[,2]
 summary(data)
 ```
 
-On transforme la base en série temporelle avec la fonction ts() de R.
+Vérifions l'hypothèse d'**homogéneité de la variance** au cours des années avec le test de bartlett
 
-On précise la fréquence de la série (ici mensuelle) et la date de début de la série.
-
-Vérifions l'hypothèse d'homogéneité de la variance au cours des années avec le test de bartlett
 ```{r}
-data$date %>% 
+data$date[1:93] %>% 
   format(format = "%Y") %>%
-  bartlett.test(data$value, .)
+  bartlett.test(data$value[1:93], .)
 ```
-Le test est peu significatif, il ne justifie pas une transformation de Box-cox pour éléminer l'hétéroscédasticité de nos valeurs.
 
+Avec une p-valeur de 0.03, l'hypothèse H0 de l'homogénéité de la variance au cours des années est rejeté.
 
+> Nous aurions pu envisager une transformation de Box-cox.
 
-On divise la série en deux parties : une partie d'apprentissage et une partie de test à partir des 12 dernières observations
+<br></br>
+
+*Préparons nos données*
+
+1.  On transforme la base en série temporelle avec la fonction ts() de R.
+
+2.  On précise la fréquence de la série (ici mensuelle) et la date de début de la série.
+
+3.  On divise la série en deux parties : une partie d'apprentissage et une partie de test.
 
 ```{r}
-data_ts <- ts(data_value, start = 1962, frequency = 12)
+data_ts <- ts(data[,2], start = 1962, frequency = 12)
 
 data_ts_train <- window(data_ts, start = c(1962, 1), end = c(1969, 9))
 data_ts_test <- window(data_ts, start = c(1969, 10), end = c(1970, 9))
 ```
 
-```{r}
+<br></br>
+
+Affichage de la série
+
+```{r echo=FALSE}
 autoplot(data_ts , main = "Série temporelle revenue champagne" , xlab = "Année", ylab = "Valeur")
 ```
 
 ## Détermination des paramètres du modèle
 
-### Détermination de l'ordre de différentiation (q & Q)
+Nous avons 105 observations à notre disposition ce qui est peu, nous rechercherons donc minimiser le nombre de paramètres à estimer afin de s'assurer de la robustesse de ceux-ci.
 
-Pour déterminer notre modèle, il faut commencer par avoir une idée série stationnaire.
+UN MODELE SARIMA EST DEFINI COMME SUIT
 
-Pour se faire on décompose la série temporelle en tendance, saisonnalité et bruit
+### Détermination de l'ordre de différentiation (d & D)
 
-> on remarque rapidement forte saisonnalité (ici annuelle) et une tendance
+La série temporelle doit être un processus stationnaire si nous voulons la modéliser par un [sarima.]{.smallcaps}
+
+Pour observer cela, on décompose la série temporelle en tendance, en saisonnalité et en bruit.
 
 ```{r}
 decompose(data_ts_train) %>% 
-  autoplot()
+  autoplot(main = "Décomposition additive de la série temporelle")
 ```
 
-Pour commencer on differencie une première fois en saisonnalité donc en application le facteur (I-B\^12)
+> on remarque une **forte saisonnalité** (ici annuelle) et une **tendance**
+
+Pour commencer on **differencie** une première fois en saisonnalité par l'application de l'opérateur $\nabla ^{12} = I - B^{12}$ aux valeurs.
 
 ```{r}
 data_diff12 <- diff(data_ts_train, 12)
 
 autoplot(data_diff12, main = "Série temporelle revenue champagne (I-B^12)", xlab = "Année", ylab = "Valeur")
 ```
-
-```{r}
-df_diff12 <- data.frame(Y=data_diff12, date=round(time(data_diff12)))
-bartlett.test(df_diff12$value, df_diff12$date)
-```
-
-
 
 On décompose la série temporelle différenciée pour l'analyser.
 
@@ -144,34 +149,52 @@ decompose_diff12 <- decompose(data_diff12)
 autoplot(decompose_diff12 , main = "Décomposition additive de la série temporelle revenue champagne (I-B^12)")
 ```
 
-Après application de l'opérateur $\nabla ^{12}$ on observe la disparition de la tendance, cela est dû à la présence du facteur $I - B$ dans la formule de l'opérateur nabla en saisonnalité.
+Après application de l'opérateur $\nabla ^{12}$ on observe que cela n'a pas été suffisant pour éliminer complétement la saisonnalité.
+
+De plus, on observe la disparition de la tendance, cela est dû à la présence du facteur $I - B$ dans la formule de l'opérateur nabla en saisonnalité.
 
 $$ \nabla ^{12} = I - B^{12} = (1 - B)P(B)$$
 
-> test de tendance : Mann-Kendall Test : <https://www.statology.org/mann-kendall-trend-test-r/> (H0) : There is no trend (H1) : There is a trend
+Vérifions la disparition de la tendance par le test de Mann-Kendall
 
 ```{r}
-library(Kendall)
+
 
 MannKendall(data_diff12)
 ```
 
-pvalue = 0.20906 \> 0.05 =\> on ne rejette pas l hypothèse (H0) donc la série n'a pas de tendance
+Avec une p-valeur de 0.209, l'hypothèse H0 "*il n'y a aucune tendance*" est accepté. tandis que l'hypothèse alternative H1 "*il y a une tendance*" est rejeté.
 
-On peut ainsi dire qu'il n'y a pas besoin de différencier en tendance, on estime que (I-B\^12) est suffisant et comprend la différentiation en tendance.
+Nous avons stationnariser la série et n'appliquerons donc pas un second opérateur nabla sur les données.
+
+Nous avons pu éliminer la tendance, ce qui est positif pour notre modèle. Mais cela induit une augmentation de **l'hétérogénéité de** **la variance** qui est elle négative pour notre modélisation.
+
+Quantifions l'augmentation en effectuant à nouveau un test d'homogénéité de la variance entre les années.
+
+```{r}
+df_diff12 <- data.frame(Y=data_diff12, date=round(time(data_diff12)))
+bartlett.test(df_diff12$value, df_diff12$date)
+```
+
+La dégradation est significative, nous sommes passés d'une p-valeur de 0.03 à 0.001. C'est à dire, d'une probabilité d'homogénéité de la variance entre les années de 3% à 0.1%. {donc là}
 
 ### Détermination de p et q (P & Q)
 
-Maintenant qu on a notre paramètre d et D on cherche les autres paramètres : p et q (P et Q pour la saisonnalité)
+Après estimation de nos paramètres d & D, estimons p et q (P et Q pour la saisonnalité).
 
-Pour trouver la valeur du paramètre q on regarde l ACF, pour trouver à "quel niveau" on doit mettre en place un moyenne mobile.
+Pour trouver la valeur du paramètre **q**, on regarde le **corrélograme** (autocorrélation) de nos données puisque $\forall h > q,$ $  \rho (h) = 0$ , ce qui correspond à $\hat{\rho} (h) \in$ interval de Bartlett. Puisque nous ne pouvons que estimer les \$ \\rho (h)\$
 
 ```{r fig.keep='last'}
-acf(data_diff12, lag.max = 24, main = "ACF revenue champagne", ci.type = "ma") %>% 
-  autoplot()
+acf(data_diff12, lag.max = 30, main = "ACF revenue champagne", ci.type = "ma") 
 ```
 
-D'après le corrélograme de (I-B\^12)Xt on peut déduire : \> La série est stationnaire \> La série présente des valeurs fortes en \^p(1) et \^p(12), donc probablement introduire un MA \> Dans les premiers niveaux on remarque une valeur en forte en q=1, On garde un MA(1) pour le moment.
+D'après le corrélograme de $I - B^{12} Xt$ on remarque que la série présente une valeur significative d'après l'interval de Bartlett en $\hat{\rho} (1)$ et $\hat{\rho} (12)$
+
+-   La série est stationnaire {???}
+
+Cela induirait une modélisation comportant un $MA(12)$ ce qui entrainerait l'estimation de 12 paramètres, ceci est impensable au vu de notre nombre d'observation.
+
+donc probablement introduire un MA \> Dans les premiers niveaux on remarque une valeur en forte en q=1, On garde un MA(1) pour le moment.
 
 Pour trouver la valeur du paramètre p on regarde la PACF :
 
@@ -222,7 +245,7 @@ On test : (H0) : les résidus εt sont non corrélés (H1) : les résidus εt so
 Box.test(model1$residuals, lag = 12, type = "Ljung-Box")
 ```
 
-On obient une p_value de 0.7071, le test est non significatif, on ne rejette pas H0. On peut conclure que les résidus εt sont non corrélés.
+On obient une p-valeur de 0.7071, le test est non significatif, on ne rejette pas H0. On peut conclure que les résidus εt sont non corrélés.
 
 On vérifie visuellement nos résultats :
 
@@ -254,12 +277,11 @@ data$prediction_arima = c(rep(NA,93) , pred$pred )
 Affichage de la prédiction
 
 ```{r}
-library(dygraphs)
-library(xts)
+
 
 don=xts( x=data[,-1], order.by=data$date)
 
-p <- dygraph(don, main = "Affichage de la présivion de l'Arima",ylab = "Revenue vente de champagne") %>%
+p <- dygraph(don, main = "Affichage de la présivion par modèle SARIMA",ylab = "Revenue vente de champagne") %>%
   dyOptions(labelsUTC = TRUE, fillGraph=TRUE, fillAlpha=0.1) %>%
   dyRangeSelector() %>%
   dyCrosshair(direction = "vertical") %>%
