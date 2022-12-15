@@ -263,7 +263,7 @@ p <- dygraph(don, main = "Affichage de la présivion de l'Arima",ylab = "Revenue
   dyOptions(labelsUTC = TRUE, fillGraph=TRUE, fillAlpha=0.1) %>%
   dyRangeSelector() %>%
   dyCrosshair(direction = "vertical") %>%
-  dyHighlight(highlightCircleSize = 5, highlightSeriesBackgroundAlpha = 0.2, hideOnMouseOut = FALSE)  
+  dyHighlight(highlightCircleSize = 5, highlightSeriesBackgroundAlpha = 1)  
 p
 ```
 
