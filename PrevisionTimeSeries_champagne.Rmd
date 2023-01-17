@@ -380,6 +380,4 @@ On vérifie nos résultats aves les mesures suivantes :
 -   RMSE : Root Mean Squared Error
 
 
-# Conclusion
-
 lorem
