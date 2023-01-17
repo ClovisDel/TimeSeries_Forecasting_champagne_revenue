@@ -1,5 +1,5 @@
 ---
-title: |
+title: Projet prévision sur série chronologique par modèle SARIMA
   
 author: 
 - Clovis Deletre
@@ -13,6 +13,8 @@ output:
     toc_depth: 5
     toc_float: true
 ---
+
+```{=html}
 <style type="text/css">
 
 body{ /* Normal  */
@@ -45,240 +47,337 @@ pre { /* Code block - determines code spacing between lines */
     font-size: 14px;
 }
 </style>
-
-
+```
 ```{r include=FALSE}
-library("Metrics")
-library(forecast)
-library(ggplot2)
-library(dplyr)
+# Librairies
+library(readr) # Lecture du document
+library("Metrics") # performance modèle
+library(forecast) # time series
+library(ggplot2) # affichage
+library(dplyr) # pipe
+library(Kendall) # test de tendance
+library(dygraphs) ; library(xts) # affichage prévision intéractif
+theme_set(theme_bw()) # thème des graphiques ggplot2
 ```
 
 # Introduction
 
-Dans le cadre de ce projet, nous souhaitons modéliser par un processus ARIMA une série temporelle données et réaliser des prévisions dessus.
+Dans le cadre de ce projet, nous souhaitons **modéliser par un processus** une série temporelle de données.
 
-Ici, la série concerne les ventes de champagne de janvier 1962 à septembre 1970.
+Ici, la série concerne les ventes de champagne de janvier 1962 à septembre 1970, avec une observation par mois.
 
-L'ambition est de pouvoir effectuer des prévision pour l'année suivante.
+L'ambition est de pouvoir effectuer une **prévision** sur les 12 dernières observations grâce à une modélisation sur le reste des données.
 
-## Importation des données et transformation en série temporelle 
+## Importation des données
 
-Dans un premier temps on import de la base, on ne selectionne que la colonne des valeurs.
-```{r}
-library(readr)
-data <- read_delim("data.csv", 
-    delim = ";", locale = locale(encoding = "ISO-8859-1"))
-data
-```
+On importe les données, puis on en affiche un résumé.
 
 ```{r}
-data_value <- data[,2]
+data <- read_delim("data.csv", delim = ";", col_types = cols(date = col_date(format = "%d/%m/%Y")), 
+    trim_ws = TRUE)
 summary(data)
 ```
 
-On transforme la base en série temporelle avec la fonction ts() de R.
+Vérifions l'hypothèse d'**homogéneité de la variance** au cours des années avec le test de bartlett
 
-On précise la fréquence de la série (ici mensuelle) et la date de début de la série.
-
-On divise la série en deux parties : une partie d'apprentissage et une partie de test à partir des 12 dernières observations
 ```{r}
-data_ts <- ts(data_value, start = 1962, frequency = 12)
+data$date[1:93] %>% 
+  format(format = "%Y") %>%
+  bartlett.test(data$value[1:93], .)
+
+
+```
+
+Avec une p-valeur de 0.03, l'hypothèse H0 de l'homogénéité de la variance au cours des années est rejeté.
+
+> Nous aurions pu envisager une transformation de Box-cox.
+
+<br></br>
+
+*Préparons nos données*
+
+1.  On transforme la base en série temporelle avec la fonction ts() de R.
+
+2.  On précise la fréquence de la série (ici mensuelle) et la date de début de la série.
+
+3.  On divise la série en deux parties : une partie d'apprentissage et une partie de test.
+
+```{r}
+data_ts <- ts(data[,2], start = 1962, frequency = 12)
 
 data_ts_train <- window(data_ts, start = c(1962, 1), end = c(1969, 9))
 data_ts_test <- window(data_ts, start = c(1969, 10), end = c(1970, 9))
 ```
 
-```{r}
-data_ts
+<br></br>
+
+Affichage de la série
+
+```{r echo=FALSE}
+autoplot(data_ts , main = "Processus Xt" , xlab = "Année", ylab = "Valeur")
 ```
 
-```{r}
-autoplot(data_ts , main = "Série temporelle revenue champagne" , xlab = "Année", ylab = "Valeur")
-```
+# Phase d'identification a priori du modèle
 
+Nous avons 105 observations à notre disposition ce qui est peu, nous rechercherons donc minimiser le nombre de paramètres à estimer afin de s'assurer de la robustesse de ceux-ci.
 
-## Détermination des paramètres du modèle 
+Un modèle SARIMA est définit comme suit
 
-### Détermination de l'ordre de différentiation (q & Q)
+$$
+\Phi_p(B) \nabla^d \quad \Phi_P(B^S)\nabla^D_S \quad X_t = \Theta_q(B) \Theta_Q(B) \mathcal{E}_t
+$$
 
-Pour déterminer notre modèle, il faut commencer par avoir une idée série stationnaire.
+Pour $1 \leq t \leq T$, les $X_t$ sont nos observations, et nos $\mathcal{E}_t$ sont des bruits blancs.
 
-Pour se faire on décompose la série temporelle en tendance, saisonnalité et bruit
+Définissons les paramètres des autres composants par étapes.
 
-> on remarque rapidement forte saisonnalité (ici annuelle) et une tendance 
+## Opérateur Nabla
+
+La série temporelle doit être un processus stationnaire si nous voulons la modéliser par un [sarima.]{.smallcaps}
+
+Pour observer cela, on décompose la série temporelle en tendance, en saisonnalité et en bruit.
 
 ```{r}
 decompose(data_ts_train) %>% 
-  autoplot()
+  autoplot(main = "Décomposition additive de Xt")
+
 ```
 
-Pour commencer on differencie une première fois en saisonnalité donc en application le facteur (I-B^12)
+> on remarque une **forte saisonnalité** (ici annuelle) et une **tendance**
+
+```{r}
+acf(data_ts_train, lag.max = 40, main = "Corrélogramme de Xt", ci.type = "ma") 
+```
+
+Les autocorrélations sont fortes pour les $\rho (h)$ dont les h sont des multiples de 12. Il s'agit d'une **saisonnalité annuel** donc.
+
+Pour traiter cette saisonnalité annuel, on **differencie** une première fois en saisonnalité par l'application de l'opérateur $\nabla ^{12} = 1 - B^{12}$ aux données.
 
 ```{r}
 data_diff12 <- diff(data_ts_train, 12)
 
-autoplot(data_diff12, main = "Série temporelle revenue champagne (I-B^12)", xlab = "Année", ylab = "Valeur")
+autoplot(data_diff12, main = "Série temporelle revenue champagne (1-B^12)", xlab = "Année", ylab = "Valeur")
 ```
-
-
 
 On décompose la série temporelle différenciée pour l'analyser.
 
 ```{r fig.keep='last'}
 decompose_diff12 <- decompose(data_diff12)
-autoplot(decompose_diff12 , main = "Décomposition additive de la série temporelle revenue champagne (I-B^12)")
+autoplot(decompose_diff12 , main = "Décomposition du processus Xt(1-B^12)")
 ```
 
+Après application de l'opérateur $\nabla ^{12}$ on observe que cela n'a pas été suffisant pour éliminer complétement la saisonnalité.
 
-A l'oeil nu on remarque que la série temporelle n'a plus de tendance, mais on vérifie par le test de Mann-Kendall. 
+De plus, on observe la disparition de la tendance, cela est dû à la présence du facteur $1 - B$ dans la formule de l'opérateur nabla en saisonnalité.
 
-> test de tendance : Mann-Kendall Test  : https://www.statology.org/mann-kendall-trend-test-r/
-(H0) : There is no trend 
-(H1) : There is a trend
-  
+$$ \nabla ^{12} = 1 - B^{12} = (1 - B)P(B)$$ Vérifions la disparition de la tendance par le test de Mann-Kendall
+
 ```{r}
-library(Kendall)
-
 MannKendall(data_diff12)
 ```
-pvalue = 0.20906 > 0.05 => on ne rejette pas l hypothèse (H0) donc la série n'a pas de tendance
 
-On peut ainsi dire qu'il n'y a pas besoin de différencier en tendance, on estime que (I-B^12) est suffisant et comprend la différentiation en tendance.
+Avec une p-valeur de 0.209, l'hypothèse H0 "*il n'y a aucune tendance*" n'est pas rejeté. Tandis que l'hypothèse alternative H1 "*il y a une tendance*" est rejeté.
 
+Nous avons stationnariser la série et n'appliquerons donc pas un second opérateur nabla sur les données.
 
-### Détermination de p et q (P & Q) 
+Nous avons pu éliminer la tendance, ce qui est positif pour notre modèle. Mais cela induit une augmentation de **l'hétérogénéité de** **la variance** qui est elle négative pour notre modélisation.
 
-Maintenant qu on a notre paramètre d et D on cherche les autres paramètres : p et q (P et Q pour la saisonnalité)
+Quantifions l'augmentation en effectuant à nouveau un test d'homogénéité de la variance entre les années.
 
-
-Pour trouver la valeur du paramètre q on regarde l ACF, pour trouver à "quel niveau" on doit mettre en place un moyenne mobile.
-```{r fig.keep='last'}
-acf(data_diff12, lag.max = 24, main = "ACF revenue champagne", ci.type = "ma") %>% 
-  autoplot()
-```
-
-D'après le corrélograme de (I-B^12)Xt on peut déduire :
-> La série est stationnaire
-> La série présente des valeurs fortes en ^p(1) et ^p(12), donc probablement introduire un MA
-> Dans les premiers niveaux on remarque une valeur en forte en q=1,
-On garde un MA(1) pour le moment.
-
-
-Pour trouver la valeur du paramètre p on regarde la PACF :  
-```{r fig.keep='last'}
-pacf(data_diff12, main = "PACF revenue champagne") %>% 
-  autoplot()
-```
-
-Ce qu on peut remarquer, c'est qu'il faut attendre le lag = 12 pour avoir une valeur significative, donc on garde un AR(0) pour le moment.
-
-
-## Test du modèle retenue :
-On obitent donc un SARIMA12 (0,0,1)(0,1,1)
-
-De la forme : (I-B^12)Xt = (1 - θ1)(1 - θ12)εt
-
-On applique notre modèle SARIMA12 (0,0,1)(0,1,1) sur la série temporelle d'apprentissage.
 ```{r}
-model1 <- arima(data_ts_train, order = c(0,0,1), seasonal = list(order = c(0,1,1), period = 12))
+df_diff12 <- data.frame(Y=data_diff12, date=round(time(data_diff12)))
+bartlett.test(df_diff12$value, df_diff12$date)
+```
+
+La dégradation est significative, nous sommes passés d'une p-valeur de 0.03 à 0.001. C'est à dire, d'une probabilité d'homogénéité de la variance entre les années de 3% à 0.1%.
+
+## Estimation paramètres p, q, P, Q
+
+Après estimation de nos paramètres d & D, estimons p et q (P et Q pour la saisonnalité).
+
+Pour trouver la valeur du paramètre **q**, on regarde le **corrélograme** (autocorrélation) de nos données puisque $\forall h > q ,\rho (h) = 0$ , ce qui correspond à $\hat{\rho} (h) \in [interval de Bartlett]$ . Puisque nous ne pouvons que estimer les $\rho (h)$. A noter que l'interval de Bartlett n'est pas constant.
+
+```{r fig.keep='last'}
+acf(data_diff12, lag.max = 75, main = "Corrélogramme Xt(1-B^12)",ci.type = "ma") 
+```
+
+D'après le corrélograme de $(1 - B^{12})Xt$ on remarque que le processus présente une autocorrélation fortement significative en $\hat{\rho} (12)$
+
+Par la corrélation significative de $\hat{\rho} (12)$, nous pourions implémenter un $MA_{12}(1)$ dans notre modèle SARIMA. Un $MA(12)$ n'était pas envisageable car cela induirait l'estimation de 12 paramètres, ce qui est impossible compte tenu du nombre d'observations.
+
+Voyons s'il est plus judicieux d'implémenter une partie autoregressive.
+
+Pour trouver la valeur du paramètre **p**, on regarde la **fonction d'autocorrélation partielle** **estimée** de notre série différencié puisque $\forall h > p ,r(h) = 0$ , ce qui correspond à $\hat{r} (h) \in [interval de Quenouille]$ . Puisque nous ne pouvons que estimer les $r(h)$
+
+```{r fig.keep='last'}
+pacf(data_diff12, lag.max = 75, main = "Fonction d'autocorrélation partielle Xt(1-B^12)") %>% 
+  autoplot()
+```
+
+D'après la fonction d'autocorrélation partielle de $(1 - B^{12})Xt$ on remarque que le processus présente une autocorrélation partielle fortement significative en $\hat{r} (12)$
+
+Par la corrélation significative de $\hat{r} (12)$, nous pourions implémenter un $AR_{12}(1)$ dans notre modèle SARIMA. Un $AR(12)$ n'était pas envisageable car cela induirait l'estimation de 12 paramètres, ce qui est impossible compte tenu du nombre d'observations (estimations peu robustes).
+
+Nous sommes face à un dilemne, soit nous implémentons un terme $MA_{12}(1)$ soit un terme $AR_{12}(1)$, sachant que les valeurs sont toute deux significatives. Pour trancher, regardons les modèles associés :
+
+*Implémentation d'un terme* $MA_{12}(1) => SARIMA_{12}[(0,0,0),(0,1,1)]$ $$(1 - B^{12}) Xt = (1- \theta_{12}B^{12})\mathcal{E}_t $$
+
+*Implémentation d'un terme* $AR_{12}(1) => SARIMA_{12}[(0,0,0),(1,1,0)]$ $$(1 - B^{12})(1 - \varphi_{12}B^{12})Xt = \mathcal{E}_t $$
+
+Par lecture des 2 modèles possibles, on remarque que sur l'écriture du modèle $SARIMA_{12}[(0,0,0),(0,1,1)]$ les prédictions ne sont pas faites à partir des données précédemment observés, nous préferons alors implémenter le terme $AR_{12}(1)$ dans notre modèle.
+
+Création de notre premier modèle
+
+```{r}
+model1 <- arima(data_ts_train, order = c(0,0,0), seasonal = list(order = c(0,1,1), period = 12))
 model1
 ```
-On obtient les valeurs de nos deux coefs : θ1 = 0.3494 et θ12 = -0.2775.
 
-On obtient également les valeurs de leurs écarts-type : σθ1 = 0.1148 et σθ12 = 0.0977.
+Vérifions que la série des résidus $\hat{\mathcal{E}_t}$ est cohérente avec l'hypothèse selon laquelle $\mathcal{E}_t$ est un bruit blanc grâce au test de Ljung-Box, il s'agit d'un équivalent du test Portmanteau (un khi²)
 
-AIC à 1344.16, il est utile pour la comparaison de modèles, plus il est petit plus le modèle est bon
-
-On test la significativité de nos coefs :
-Pour chaque coef on test :
-(H0) : θi = 0
-(H1) : θi ≠ 0
-
-```{r}
-require(lmtest)
-coeftest(model1)
-```
-
-Pour les deux θ, le test est hautement signficatif donc on rejette H0. 
-
-## Test des résidus
-Maintenant on test les résidus, en effet ils doivent correspondre à un bruit blanc. 
-
-On commence par tester les autocorrélation des résidus εt : 
-
-On test : 
-(H0) : les résidus εt sont non corrélés
-(H1) : les résidus εt sont corrélés
 ```{r}
 Box.test(model1$residuals, lag = 12, type = "Ljung-Box")
 ```
-On obient une p_value de 0.7071, le test est non significatif, on ne rejette pas H0. 
-On peut conclure que les résidus εt sont non corrélés.
 
-On vérifie visuellement nos résultats : 
+Avec un p-valeur de 0.38, l'hypothèse H0 "*les résidus sont corrélés*" n'est pas rejeté, tandis que l'hypothèse H1 "*les résidus sont non corrélés*" est rejeté. Le test est peu significatif, **recherchons un terme simple à rajouter à notre modèle**.
+
 ```{r}
-autoplot(model1$residuals, main = "Résidus du modèle SARIMA12 (0,0,1)(0,1,1)", xlab = "Année", ylab = "Valeur")
+acf(model1$residuals, lag.max = 12, main = "Corrélogramme (I-B^12)(1+0.2B^12)Xt",ci.type = "ma")
 ```
-```{r fig.keep='last'}
-acf(model1$residuals, lag.max = 24, main = "ACF des résidus du modèle SARIMA12 (0,0,1)(0,1,1)", ci.type = "ma") %>% 
-  autoplot()
-```
- on a un pic significatif ce qui est normal pour l'acf des résidus.
-```{r fig.keep='last'}
-pacf(model1$residuals, main = "PACF des résidus du modèle SARIMA12 (0,0,1)(0,1,1)") %>% 
+
+```{r}
+pacf(model1$residuals, lag.max = 12, main = "Fonction d'autocorrélation partielle (I-B^12)(1+0.2B^12)Xt") %>% 
   autoplot()
 ```
 
+Aucune valeur n'est significative sur la fonction d'autocorrélation partielle, tandis que $\hat{\rho} (1) = 0.185$ est presque significative sachant l'interval de Bartlett à `r 1.96/ (81)**(1/2) * (1+2*0.185**2)**(1/2)` pour cette valeur.On accepte alors l'entré de ce terme dans notre modèle.
 
-De ce fait on peut conclure que le modèle SARIMA12 (0,0,1)(0,1,1) est bon pour notre série temporelle.
+# Estimation des paramètres du modèle
 
+Notre modèle SARIMA est définit tel que $$SARIMA_{12}[(0,0,1),(1,1,0)]$$ $$(1 - B^{12})(1 - \varphi_{12}B^{12})Xt = (1- \theta_{1}B^{1})\mathcal{E}_t $$
+
+```{r}
+model2 <- arima(data_ts_train, order = c(0,0,1), seasonal = list(order = c(1,1,0), period = 12))
+model2
+```
+
+Le paramètre de l'AR(1) de saisonnalité 12 est estimé à -0.34 Et le paramètre du MA(1) est estimé à 0.36. Avec des écart-types respectifs de 0.11 et 0.10
+
+On remplace les paramètres estimés $$(1 - B^{12})(1 + 0.34B^{12})Xt = (1- 0.36B^{1})\mathcal{E}_t $$
+
+# Tests statistiques
+
+## Significativité des coefficients
+
+On test la significativité des coffecients de notre ARIMA. $$
+ \left\{
+    \begin{array}{ll}
+        coefficient = 0 & \mbox{(H0)}  \\
+        coefficient \ne 0 & \mbox{(H1)}
+    \end{array}
+\right.
+$$
+
+```{r}
+require(lmtest)
+coeftest(model2)
+```
+
+Le test est hautement signficatif, on rejete H0 *"les coefficients sont nulles"* et on ne rejete pas H1 *"les coefficients sont non nulles"*.
+
+## Test des résidus
+
+Vérifions que la série des résidus $\hat{\mathcal{E}_t}$ est cohérente avec l'hypothèse selon laquelle $\mathcal{E}_t$ est un bruit blanc grâce au test de Ljung-Box, il s'agit d'un équivalent du test Portmanteau (un khi²)
+
+```{r}
+Box.test(model2$residuals, lag = 12, type = "Ljung-Box")
+```
+
+Avec un p-valeur de 0.93, l'hypothèse H0 "*les résidus sont corrélés*" n'est pas rejeté, tandis que l'hypothèse H1 "*les résidus sont non corrélés*" est rejeté. Le test est hautement significatif.
+
+Vérification visuel
+
+```{r}
+autoplot(model2$residuals, main = "Résidus du modèle SARIMA12 (0,0,1)(1,1,0)", xlab = "Année", ylab = "Valeur")
+```
+
+```{r fig.keep='last'}
+acf(model1$residuals, lag.max = 24, main = "ACF des résidus du modèle SARIMA12 (0,0,1)(1,1,0)", ci.type = "ma") %>% 
+  autoplot()
+```
+
+```{r fig.keep='last'}
+pacf(model1$residuals, main = "PACF des résidus du modèle SARIMA12 (0,0,1)(1,1,0)") %>% 
+  autoplot()
+```
+
+On constate visuellement que aucune corrélation ou autocorrélation partielle des résidus n'est présente. De ce fait on peut conclure que le modèle SARIMA12 (0,0,1)(0,1,1) est correct pour notre série temporelle.
 
 ## Prédiction sur la série temporelle de test
 
-```{r}
-
-```
+Nous avons entrainé notre modèle sur l'ensemble des données excepté la dernière année, prédisons cette dernière avec notre modèle.
 
 ```{r}
 pred = predict(model1, 12)
+data$predict = c(rep(NA,93) , pred$pred )
+names(data) = c("date","Xt","prédiction du modèle SARIMA")
 ```
 
+Affichage de la prédiction
+
 ```{r}
-#y = data.frame(data_ts, c(data_ts_train, predict(model1, 12)))
+don=xts( x=data[,-1], order.by=data$date)
+
+p <- dygraph(don, main = "Affichage de la présivion par modèle SARIMA",ylab = "Revenue vente de champagne") %>%
+  dyOptions(labelsUTC = TRUE, fillGraph=TRUE, fillAlpha=0.1) %>%
+  dyRangeSelector() %>%
+  dyCrosshair(direction = "vertical") %>%
+  dyHighlight(highlightCircleSize = 5, highlightSeriesBackgroundAlpha = 1)  
+p
 ```
 
-```{r}
-forecast(model1, h=12, xreg=fourierf(data_ts,2,0)) %>% 
-  autoplot()
-
-```
+# Choix d'un modèle
 
 
+Comparons notre modèle avec d'autres modèles qui auraient pu être choisit.
 
-On vérifie nos résultats aves les mesures suivantes : 
+Liste des modèles à comparer
 
-> MAPE : Mean Absolute Percentage Error
-> MAE : Mean Absolute Error
-> MSE : Mean Squared Error
-> RMSE : Root Mean Squared Error
+Notre SARIMA
+same mais MA 1 en saiso 12
+sans différenciation
+avec 1 différenciation de trop
+
 
 ```{r}
+eval_modele <- function(modele){
 MAPE <- mape(data_ts_test, pred$pred)
 MAE <- mae(data_ts_test, pred$pred)
 MSE <- mse(data_ts_test, pred$pred)
 RMSE <- rmse(data_ts_test, pred$pred)
-
-MAPE
-MAE
-MSE
-RMSE
-
-```
-```{r}
-library(forecast)
-fit <- auto.arima(data_ts_train, seasonal = TRUE, stepwise = FALSE, approximation = FALSE)  
-fit
+  
+}
 ```
 
-CONCLURE 
+ICI RESULTS DE CHAQUE MODELE
+
+Nous les évaluerons selon critère d'information (Akaïde)
+
+EXPLICATION CRITERE AIC
+
+AIC à 1344.16, il est utile pour la comparaison de modèles, plus il est petit plus le modèle est bon
+
+AUTRE CRITERE
+
+On vérifie nos résultats aves les mesures suivantes :
+
+-   MAPE : Mean Absolute Percentage Error
+
+-   MAE : Mean Absolute Error
+
+-   MSE : Mean Squared Error
+
+-   RMSE : Root Mean Squared Error
+
+
+lorem
