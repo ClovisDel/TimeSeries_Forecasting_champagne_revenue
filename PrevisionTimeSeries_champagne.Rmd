@@ -119,7 +119,7 @@ autoplot(data_ts , main = "Processus Xt" , xlab = "Année", ylab = "Valeur")
 
 # Phase d'identification a priori du modèle
 
-Nous avons 105 observations à notre disposition ce qui est peu, nous rechercherons donc minimiser le nombre de paramètres à estimer afin de s'assurer de la robustesse de ceux-ci.
+Nous avons 105 observations à notre disposition ce qui est peu, nous rechercherons donc à minimiser le nombre de paramètres à estimer afin de s'assurer de la robustesse de ceux-ci.
 
 Un modèle SARIMA est définit comme suit
 
@@ -239,7 +239,7 @@ Vérifions que la série des résidus $\hat{\mathcal{E}_t}$ est cohérente avec 
 Box.test(model1$residuals, lag = 12, type = "Ljung-Box")
 ```
 
-Avec un p-valeur de 0.38, l'hypothèse H0 "*les résidus sont corrélés*" n'est pas rejeté, tandis que l'hypothèse H1 "*les résidus sont non corrélés*" est rejeté. Le test est peu significatif, **recherchons un terme simple à rajouter à notre modèle**.
+Avec une p-valeur non significative de 0.38, l'hypothèse H0 "*les résidus sont non corrélés*" n'est pas rejeté, tandis que l'hypothèse H1 "*les résidus sont corrélés*" est rejeté. Le test est peu significatif, **recherchons un terme simple à rajouter à notre modèle**.
 
 ```{r}
 acf(model1$residuals, lag.max = 12, main = "Corrélogramme (I-B^12)(1+0.2B^12)Xt",ci.type = "ma")
@@ -293,7 +293,7 @@ Vérifions que la série des résidus $\hat{\mathcal{E}_t}$ est cohérente avec 
 Box.test(model2$residuals, lag = 12, type = "Ljung-Box")
 ```
 
-Avec un p-valeur de 0.93, l'hypothèse H0 "*les résidus sont corrélés*" n'est pas rejeté, tandis que l'hypothèse H1 "*les résidus sont non corrélés*" est rejeté. Le test est hautement significatif.
+Avec une p-valeur non significative de 0.93, l'hypothèse H0 "*les résidus sont non corrélés*" n'est pas rejeté, tandis que l'hypothèse H1 "*les résidus sont corrélés*" est rejeté. Le test est hautement significatif.
 
 Vérification visuel
 
@@ -381,3 +381,11 @@ On vérifie nos résultats aves les mesures suivantes :
 
 
 lorem
+
+
+
+```{r}
+library(forecast)
+fit <- auto.arima(data_ts_train, seasonal = TRUE, stepwise = FALSE, approximation = FALSE)  
+fit
+```
